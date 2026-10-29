@@ -1,0 +1,221 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  CUSTOMER
+  VENDOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum OrderItemStatus {
+  PENDING
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCESS
+  FAILED
+}
+
+enum PaymentAttemptStatus {
+  PENDING
+  AUTHORIZED
+  SUCCESS
+  FAILED
+}
+
+model User {
+  id             Int         @id @default(autoincrement())
+  name           String
+  email          String      @unique
+  passwordHash   String
+  role           UserRole    @default(CUSTOMER)
+  status         UserStatus  @default(ACTIVE)
+  products       Product[]
+  cart           Cart?
+  orders         Order[]
+  soldOrderItems OrderItem[] @relation("VendorOrderItems")
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  refreshTokens RefreshToken[]
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique
+  familyId  String
+  userId    Int
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+enum ProductStatus {
+  DRAFT
+  ACTIVE
+  ARCHIVED
+}
+
+model Product {
+  id           Int           @id @default(autoincrement())
+  vendorId     Int
+  name         String        @db.VarChar(150)
+  slug         String        @db.VarChar(180)
+  description  String?
+  priceInPaise Int
+  stock        Int           @default(0)
+  status       ProductStatus @default(DRAFT)
+  cartItems    CartItem[]
+  orderItems   OrderItem[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  vendor User @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+
+  @@unique([vendorId, slug])
+  @@index([vendorId, createdAt])
+  @@index([status, createdAt])
+}
+
+model Cart {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user  User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items CartItem[]
+}
+
+model CartItem {
+  id        Int      @id @default(autoincrement())
+  cartId    Int
+  productId Int
+  quantity  Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([cartId, productId])
+  @@index([productId])
+}
+
+model Order {
+  id           Int         @id @default(autoincrement())
+  userId       Int
+  status       OrderStatus @default(PENDING)
+  totalInPaise Int
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  user     User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items    OrderItem[]
+  payments Payment[]
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+model OrderItem {
+  id               Int            @id @default(autoincrement())
+  orderId          Int
+  productId        Int?
+  vendorId         Int
+  productName      String         @db.VarChar(150)
+  productSlug      String         @db.VarChar(180)
+  unitPriceInPaise Int
+  quantity         Int
+  lineTotalInPaise Int
+  status           OrderItemStatus @default(PENDING)
+  createdAt        DateTime       @default(now())
+
+  order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+  vendor  User     @relation("VendorOrderItems", fields: [vendorId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([vendorId, createdAt])
+  @@index([vendorId, status, createdAt])
+}
+
+model Payment {
+  id                Int              @id @default(autoincrement())
+  orderId           Int
+  amountInPaise     Int
+  currency          String           @default("INR") @db.VarChar(3)
+  status            PaymentStatus    @default(PENDING)
+  attempts          PaymentAttempt[]
+  providerOrderId   String?          @unique
+  providerPaymentId String?          @unique
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Restrict)
+
+  @@index([orderId, createdAt])
+  @@index([status, createdAt])
+}
+
+model PaymentAttempt {
+  id                 Int                  @id @default(autoincrement())
+  paymentId          Int
+  providerPaymentId  String?              @unique
+  status             PaymentAttemptStatus @default(PENDING)
+  amountInPaise      Int
+  currency           String               @default("INR") @db.VarChar(3)
+  method             String?              @db.VarChar(30)
+  failureCode        String?              @db.VarChar(100)
+  failureDescription String?              @db.VarChar(500)
+  needsReview        Boolean              @default(false)
+  reviewReason       String?              @db.VarChar(500)
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+
+  @@index([paymentId, createdAt])
+  @@index([status, createdAt])
+}
+
+model RazorpayWebhookEvent {
+  id              Int       @id @default(autoincrement())
+  providerEventId String    @unique
+  eventType       String
+  processAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([eventType, createdAt])
+}

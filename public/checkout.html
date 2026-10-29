@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PayFlow Test Checkout</title>
+    <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
+  </head>
+  <body>
+    <h1>PayFlow Checkout</h1>
+
+    <label for="orderId">PayFlow Order ID</label>
+    <input id="orderId" type="number" min="1" required />
+
+    <button id="payButton">Pay with Razorpay</button>
+    <p id="message" role="status"></p>
+
+    <script>
+      const orderIdInput = document.getElementById("orderId");
+      const payButton = document.getElementById("payButton");
+      const message = document.getElementById("message");
+
+      payButton.addEventListener("click", async () => {
+        const orderId = Number(orderIdInput.value);
+
+        if (!Number.isInteger(orderId) || orderId <= 0) {
+          message.textContent = "Enter a valid PayFlow order ID.";
+          return;
+        }
+
+        payButton.disabled = true;
+        message.textContent = "Creating payment order...";
+
+        try {
+          const response = await fetch("/api/payments/initiate", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ orderId }),
+          });
+
+          const result = await response.json();
+
+          if (!response.ok) {
+            throw new Error(result.message || "Payment initiation failed");
+          }
+
+          const payment = result.data;
+
+          const options = {
+            key: payment.keyId,
+            amount: payment.amount,
+            currency: payment.currency,
+            name: "PayFlow",
+            description: `Order #${orderId}`,
+            order_id: payment.razorpayOrderId,
+
+            handler: async function (checkoutResponse) {
+              message.textContent = "Verifying payment...";
+
+              try {
+                const verifyResponse = await fetch("/api/payments/verify", {
+                  method: "POST",
+                  credentials: "same-origin",
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    razorpayOrderId: checkoutResponse.razorpay_order_id,
+                    razorpayPaymentId: checkoutResponse.razorpay_payment_id,
+                    razorpaySignature: checkoutResponse.razorpay_signature,
+                  }),
+                });
+
+                const verification = await verifyResponse.json();
+
+                if (!verifyResponse.ok) {
+                  throw new Error(
+                    verification.message || "Verification failed",
+                  );
+                }
+
+                message.textContent =
+                  `Payment verified! Order #${verification.data.orderId} is ` +
+                  verification.data.orderStatus +
+                  ".";
+              } catch (error) {
+                message.textContent =
+                  error.message +
+                  " Check your order status before trying again.";
+              } finally {
+                payButton.disabled = false;
+              }
+            },
+
+            modal: {
+              ondismiss: function () {
+                message.textContent =
+                  "Checkout closed. Your order has not been confirmed.";
+                payButton.disabled = false;
+              },
+            },
+          };
+
+          const checkout = new Razorpay(options);
+
+          checkout.on("payment.failed", function (event) {
+            message.textContent = event.error.description || "Payment failed.";
+            payButton.disabled = false;
+          });
+
+          checkout.open();
+        } catch (error) {
+          message.textContent = error.message;
+          payButton.disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
