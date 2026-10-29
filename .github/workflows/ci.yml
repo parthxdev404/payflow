@@ -36,3 +36,6 @@ jobs:
 
       - name: Build application
         run: npm run build
+
+      - name: Run automated tests
+        run: npm test
