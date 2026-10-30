@@ -46,7 +46,7 @@ export const listProductsController = async (
     res.status(200).json({
       success: true,
       message: "Product retrived successfully",
-      date: result.products,
+      data: result.products,
       pagination: result.pagination,
     });
   } catch (error) {

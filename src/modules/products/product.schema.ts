@@ -30,6 +30,9 @@ export const productIdSchema = z.object({
 });
 
 export const updateProductSchema = createProductSchema
+  .extend({
+    stock: z.number().int().nonnegative().optional(),
+  })
   .partial()
   .refine((data) => Object.keys(data).length > 0, {
     message: "At least one field must be provided",
