@@ -1,3 +1,4 @@
+
 name: PayFlow CI
 
 on:
@@ -9,12 +10,35 @@ permissions:
 
 jobs:
   build:
-    name: TypeScript and Build Checks
+    name: TypeScript, Database and Test Checks
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: payflow
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d payflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     env:
+      NODE_ENV: test
+      PORT: 3000
       DATABASE_URL: postgresql://ci:ci@localhost:5432/payflow
-      RAZORPAY_WEBHOOK_SECRET: ci-test-webhook-secret
+      JWT_ACCESS_SECRET: ci-only-jwt-secret-for-testing-at-least-32-characters
+      JWT_ACCESS_EXPIRESIN: 15m
+      RAZORPAY_KEY_ID: rzp_test_ci_placeholder
+      RAZORPAY_KEY_SECRET: ci-only-razorpay-secret
+      RAZORPAY_WEBHOOK_SECRET: ci-only-webhook-secret
+      FRONTEND_URL: http://localhost:5173
+      LOG_LEVEL: silent
 
     steps:
       - name: Checkout repository
@@ -32,11 +56,14 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
+
       - name: Check TypeScript
         run: npx tsc --noEmit
 
-      - name: Build application
-        run: npm run build
-
       - name: Run automated tests
         run: npm test
+
+      - name: Build application
+        run: npm run build
