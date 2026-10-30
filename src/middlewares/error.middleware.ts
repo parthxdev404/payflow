@@ -13,6 +13,7 @@ export function errorMiddleware(
     return next(error);
   }
 
+  // Handle Prisma database errors
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
     if (error.code === "P2002") {
       res.status(409).json({
@@ -23,6 +24,24 @@ export function errorMiddleware(
     }
   }
 
+  // Handle custom application errors
+  if (error instanceof Error) {
+    const statusCode = (error as Error & { statusCode?: number }).statusCode;
+
+    if (
+      typeof statusCode === "number" &&
+      statusCode >= 400 &&
+      statusCode <= 599
+    ) {
+      res.status(statusCode).json({
+        success: false,
+        message: error.message,
+      });
+      return;
+    }
+  }
+
+  // Handle unexpected errors
   res.status(500).json({
     success: false,
     message: "Internal Server Error",

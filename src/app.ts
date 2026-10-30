@@ -17,7 +17,10 @@ import vendorRouter from "./modules/vendors/vendor.route";
 import adminRouter from "./modules/admin/admin.routes";
 import cors from "cors";
 import { env } from "./config/env";
+import { setupSwagger } from "./config/swagger";
+
 const app = express();
+setupSwagger(app);
 
 app.use(helmet());
 app.use(
