@@ -1,8 +1,10 @@
+
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import request from "supertest";
 
 import app from "../src/app";
 import { prisma } from "../src/config/database";
+import { redis } from "../src/config/redis";
 import { hashPassword } from "../src/utils/password";
 
 const uniqueId = `${process.pid}-${Date.now()}`;
@@ -84,6 +86,14 @@ describe("Products API integration tests", () => {
   afterAll(async () => {
     const vendorIds = [vendorAId, vendorBId].filter(Boolean);
     const userIds = [vendorAId, vendorBId, customerId].filter(Boolean);
+
+    if (productAId) {
+      await redis.del(`product:${productAId}`);
+    }
+
+    if (productBId) {
+      await redis.del(`product:${productBId}`);
+    }
 
     if (vendorIds.length > 0) {
       await prisma.product.deleteMany({
@@ -243,6 +253,46 @@ describe("Products API integration tests", () => {
     expect(response.body.data.status).toBe("ACTIVE");
   });
 
+  // Redis caching
+
+  it("should cache an active product and reuse the cached data", async () => {
+    const cacheKey = `product:${productAId}`;
+
+    // Start with an empty cache.
+    await redis.del(cacheKey);
+
+    // First request: fetch from PostgreSQL and populate Redis.
+    const firstResponse = await request(app).get(
+      `/api/products/${productAId}`,
+    );
+
+    expect(firstResponse.status).toBe(200);
+
+    const cachedProduct = await redis.get(cacheKey);
+
+    expect(cachedProduct).not.toBeNull();
+
+    if (!cachedProduct) {
+      throw new Error("Product was not stored in Redis.");
+    }
+
+    expect(JSON.parse(cachedProduct)).toMatchObject({
+      id: productAId,
+      name: "Test Laptop",
+      status: "ACTIVE",
+    });
+
+    // Second request: should still return the cached product.
+    const secondResponse = await request(app).get(
+      `/api/products/${productAId}`,
+    );
+
+    expect(secondResponse.status).toBe(200);
+    expect(secondResponse.body.data).toEqual(
+      firstResponse.body.data,
+    );
+  });
+
   it("should return 404 for a product that does not exist", async () => {
     const response = await request(app).get("/api/products/999999999");
 
@@ -300,6 +350,16 @@ describe("Products API integration tests", () => {
   // Product updates and ownership
 
   it("should allow a vendor to update their own product", async () => {
+    const cacheKey = `product:${productAId}`;
+
+    // Ensure the product is cached before updating it.
+    const cachedResponse = await request(app).get(
+      `/api/products/${productAId}`,
+    );
+
+    expect(cachedResponse.status).toBe(200);
+    expect(await redis.get(cacheKey)).not.toBeNull();
+
     const response = await vendorAAgent
       .patch(`/api/products/${productAId}`)
       .send({
@@ -314,6 +374,9 @@ describe("Products API integration tests", () => {
       name: "Updated Test Laptop",
       priceInPaise: 5500000,
     });
+
+    // Updating the product must invalidate its old cache.
+    expect(await redis.get(cacheKey)).toBeNull();
   });
 
   it("should prevent a vendor from updating another vendor's product", async () => {

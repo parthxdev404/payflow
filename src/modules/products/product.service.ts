@@ -1,15 +1,24 @@
+
 import { prisma } from "../../config/database";
 import type {
   CreateProductInput,
   ListProductsQuery,
   UpdateProductInput,
 } from "./product.schema";
+import {
+  getCache,
+  setCache,
+  deleteCache,
+} from "../../utils/cache";
+
+const PRODUCT_CACHE_TTL = 300; // 5 minutes
 
 type CreateProductOptions = {
   vendorId: number;
   input: CreateProductInput;
 };
 
+// CREATE PRODUCT
 export const createProduct = async ({
   vendorId,
   input,
@@ -59,6 +68,7 @@ export const createProduct = async ({
   });
 };
 
+// LIST PRODUCTS
 export const listProducts = async (query: ListProductsQuery) => {
   const { page, limit, search, sortBy, order } = query;
 
@@ -66,15 +76,16 @@ export const listProducts = async (query: ListProductsQuery) => {
     status: "ACTIVE" as const,
     ...(search
       ? {
-          name: {
-            contains: search,
-            mode: "insensitive" as const,
-          },
-        }
+        name: {
+          contains: search,
+          mode: "insensitive" as const,
+        },
+      }
       : {}),
   };
 
   const skip = (page - 1) * limit;
+
   const [products, total] = await prisma.$transaction([
     prisma.product.findMany({
       where,
@@ -98,6 +109,7 @@ export const listProducts = async (query: ListProductsQuery) => {
     }),
     prisma.product.count({ where }),
   ]);
+
   return {
     products,
     pagination: {
@@ -111,7 +123,20 @@ export const listProducts = async (query: ListProductsQuery) => {
   };
 };
 
+// GET PRODUCT BY ID
 export const getProductById = async (id: number) => {
+  const cacheKey = `product:${id}`;
+
+  // 1. Check Redis first.
+  const cachedProduct = await getCache<
+    Awaited<ReturnType<typeof prisma.product.findFirst>>
+  >(cacheKey);
+
+  if (cachedProduct) {
+    return cachedProduct;
+  }
+
+  // 2. Cache miss: fetch from PostgreSQL.
   const product = await prisma.product.findFirst({
     where: {
       id,
@@ -136,13 +161,18 @@ export const getProductById = async (id: number) => {
     Object.assign(error, { statusCode: 404 });
     throw error;
   }
+
+  // 3. Store the result in Redis for five minutes.
+  await setCache(cacheKey, product, PRODUCT_CACHE_TTL);
+
   return product;
 };
 
+// UPDATE PRODUCT
 export const updateProduct = async (
   productId: number,
   vendorId: number,
-  data: UpdateProductInput,
+  data: UpdateProductInput
 ) => {
   const product = await prisma.product.findUnique({
     where: { id: productId },
@@ -165,7 +195,7 @@ export const updateProduct = async (
     throw error;
   }
 
-  return prisma.product.update({
+  const updatedProduct = await prisma.product.update({
     where: { id: productId },
     data,
     select: {
@@ -181,9 +211,18 @@ export const updateProduct = async (
       updatedAt: true,
     },
   });
+
+  // Invalidate the old cached product.
+  await deleteCache(`product:${productId}`);
+
+  return updatedProduct;
 };
 
-export const archiveProduct = async (productId: number, vendorId: number) => {
+// ARCHIVE PRODUCT
+export const archiveProduct = async (
+  productId: number,
+  vendorId: number
+) => {
   const product = await prisma.product.findUnique({
     where: {
       id: productId,
@@ -213,7 +252,7 @@ export const archiveProduct = async (productId: number, vendorId: number) => {
     throw error;
   }
 
-  return prisma.product.update({
+  const archivedProduct = await prisma.product.update({
     where: { id: productId },
     data: {
       status: "ARCHIVED",
@@ -231,9 +270,18 @@ export const archiveProduct = async (productId: number, vendorId: number) => {
       updatedAt: true,
     },
   });
+
+  // Remove the previously cached active product.
+  await deleteCache(`product:${productId}`);
+
+  return archivedProduct;
 };
 
-export const activateProduct = async (productId: number, vendorId: number) => {
+// ACTIVATE PRODUCT
+export const activateProduct = async (
+  productId: number,
+  vendorId: number
+) => {
   const product = await prisma.product.findUnique({
     where: { id: productId },
     select: {
@@ -256,7 +304,7 @@ export const activateProduct = async (productId: number, vendorId: number) => {
   }
 
   if (product.status === "ACTIVE") {
-    const error = new Error("Product is alreadt active");
+    const error = new Error("Product is already active");
     Object.assign(error, { statusCode: 409 });
     throw error;
   }
@@ -267,7 +315,7 @@ export const activateProduct = async (productId: number, vendorId: number) => {
     throw error;
   }
 
-  return prisma.product.update({
+  const activatedProduct = await prisma.product.update({
     where: { id: productId },
     data: {
       status: "ACTIVE",
@@ -285,4 +333,9 @@ export const activateProduct = async (productId: number, vendorId: number) => {
       updatedAt: true,
     },
   });
+
+  // Remove any previously cached product data.
+  await deleteCache(`product:${productId}`);
+
+  return activatedProduct;
 };
