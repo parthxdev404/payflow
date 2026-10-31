@@ -87,6 +87,7 @@ const startServer = async (): Promise<void> => {
   }
 };
 
+
 const shutdown = (signal: string): Promise<void> => {
   if (shuttingDown) {
     return cleanupDependencies();
@@ -95,12 +96,14 @@ const shutdown = (signal: string): Promise<void> => {
   shuttingDown = true;
   logger.info({ signal }, "Graceful shutdown started");
 
-  if (!server?.listening) {
+  const currentServer = server;
+
+  if (!currentServer?.listening) {
     return cleanupDependencies();
   }
 
   return new Promise<void>((resolve) => {
-    server!.close((error) => {
+    currentServer.close((error) => {
       if (error) {
         logger.error(
           { err: error },
@@ -113,6 +116,7 @@ const shutdown = (signal: string): Promise<void> => {
     });
   });
 };
+
 
 process.on("SIGTERM", () => {
   void shutdown("SIGTERM");
