@@ -4,7 +4,11 @@ import request from "supertest";
 
 import app from "../src/app";
 import { prisma } from "../src/config/database";
-import { redis } from "../src/config/redis";
+import {
+  redis,
+  connectRedis,
+  disconnectRedis,
+} from "../src/config/redis";
 import { hashPassword } from "../src/utils/password";
 
 const uniqueId = `${process.pid}-${Date.now()}`;
@@ -27,6 +31,9 @@ let productBId: number;
 
 describe("Products API integration tests", () => {
   beforeAll(async () => {
+    // Establish Redis connection before tests use the cache.
+    await connectRedis();
+
     const passwordHash = await hashPassword(password);
 
     const [vendorA, vendorB, customer] = await Promise.all([
@@ -84,37 +91,50 @@ describe("Products API integration tests", () => {
   });
 
   afterAll(async () => {
-    const vendorIds = [vendorAId, vendorBId].filter(Boolean);
-    const userIds = [vendorAId, vendorBId, customerId].filter(Boolean);
+    try {
+      // Remove cached products created by this test suite.
+      const cacheKeys = [productAId, productBId]
+        .filter((id): id is number => Boolean(id))
+        .map((id) => `product:${id}`);
 
-    if (productAId) {
-      await redis.del(`product:${productAId}`);
-    }
+      if (cacheKeys.length > 0) {
+        await redis.del(...cacheKeys);
+      }
 
-    if (productBId) {
-      await redis.del(`product:${productBId}`);
-    }
+      // Delete products belonging to the test vendors.
+      const vendorIds = [vendorAId, vendorBId].filter(
+        (id): id is number => Boolean(id),
+      );
 
-    if (vendorIds.length > 0) {
-      await prisma.product.deleteMany({
-        where: {
-          vendorId: { in: vendorIds },
-        },
-      });
-    }
+      if (vendorIds.length > 0) {
+        await prisma.product.deleteMany({
+          where: {
+            vendorId: { in: vendorIds },
+          },
+        });
+      }
 
-    if (userIds.length > 0) {
-      await prisma.refreshToken.deleteMany({
-        where: {
-          userId: { in: userIds },
-        },
-      });
+      // Delete refresh tokens and test users.
+      const userIds = [vendorAId, vendorBId, customerId].filter(
+        (id): id is number => Boolean(id),
+      );
 
-      await prisma.user.deleteMany({
-        where: {
-          id: { in: userIds },
-        },
-      });
+      if (userIds.length > 0) {
+        await prisma.refreshToken.deleteMany({
+          where: {
+            userId: { in: userIds },
+          },
+        });
+
+        await prisma.user.deleteMany({
+          where: {
+            id: { in: userIds },
+          },
+        });
+      }
+    } finally {
+      // Always close Redis, even if database cleanup fails.
+      await disconnectRedis();
     }
   });
 
@@ -245,7 +265,9 @@ describe("Products API integration tests", () => {
   // Product retrieval and search
 
   it("should return an active product by ID", async () => {
-    const response = await request(app).get(`/api/products/${productAId}`);
+    const response = await request(app).get(
+      `/api/products/${productAId}`,
+    );
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
@@ -288,9 +310,7 @@ describe("Products API integration tests", () => {
     );
 
     expect(secondResponse.status).toBe(200);
-    expect(secondResponse.body.data).toEqual(
-      firstResponse.body.data,
-    );
+    expect(secondResponse.body.data).toEqual(firstResponse.body.data);
   });
 
   it("should return 404 for a product that does not exist", async () => {
@@ -323,6 +343,7 @@ describe("Products API integration tests", () => {
 
     expect(firstPage.status).toBe(200);
     expect(firstPage.body.data).toHaveLength(1);
+
     expect(firstPage.body.pagination).toMatchObject({
       page: 1,
       limit: 1,
@@ -342,7 +363,9 @@ describe("Products API integration tests", () => {
   });
 
   it("should reject invalid product IDs", async () => {
-    const response = await request(app).get("/api/products/invalid-id");
+    const response = await request(app).get(
+      "/api/products/invalid-id",
+    );
 
     expect(response.status).toBe(400);
   });
@@ -369,6 +392,7 @@ describe("Products API integration tests", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
+
     expect(response.body.data).toMatchObject({
       id: productAId,
       name: "Updated Test Laptop",
@@ -409,7 +433,9 @@ describe("Products API integration tests", () => {
   });
 
   it("should hide archived products from public retrieval", async () => {
-    const response = await request(app).get(`/api/products/${productAId}`);
+    const response = await request(app).get(
+      `/api/products/${productAId}`,
+    );
 
     expect(response.status).toBe(404);
   });
