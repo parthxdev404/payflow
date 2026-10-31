@@ -26,6 +26,10 @@ the required user role.
       url: "http://localhost:5000",
       description: "Local development server",
     },
+    {
+      url: "https://payflow-g11m.onrender.com",
+      description: "Production server",
+    },
   ],
 
   tags: [
