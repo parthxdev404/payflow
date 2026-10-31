@@ -1,10 +1,16 @@
 import "dotenv/config";
+import { z } from "zod";
 
 const port = Number(process.env.PORT ?? 3000);
 const jwtAccessSecret = process.env.JWT_ACCESS_SECRET;
 const razorpayKeyId = process.env.RAZORPAY_KEY_ID;
 const razorpayKeySecret = process.env.RAZORPAY_KEY_SECRET;
 const razorpayWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
+const redisUrl = process.env.REDIS_URL;
+
+if (!redisUrl) {
+  throw new Error("REDIS_URL is required");
+}
 
 if (!razorpayWebhookSecret) {
   throw new Error("Razorpay webhook secret must be configured");
@@ -32,4 +38,5 @@ export const env = {
   RAZORPAY_KEY_SECRET: razorpayKeySecret,
   RAZORPAY_WEBHOOK_SECRET: razorpayWebhookSecret,
   FRONTEND_URL: process.env.FRONTEND_URL,
+  REDIS_URL: redisUrl
 } as const;

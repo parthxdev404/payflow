@@ -1,23 +1,76 @@
+
 import type { Server } from "node:http";
 
 import app from "./app";
 import { env } from "./config/env";
 import { prisma } from "./config/database";
 import { logger } from "./config/logger";
+import { connectRedis, disconnectRedis } from "./config/redis";
 
 let server: Server | undefined;
 let shuttingDown = false;
+let cleanupPromise: Promise<void> | undefined;
 
-const startServer = async () => {
+const cleanupDependencies = (): Promise<void> => {
+  if (cleanupPromise) return cleanupPromise;
+
+  cleanupPromise = (async () => {
+    const results = await Promise.allSettled([
+      disconnectRedis(),
+      prisma.$disconnect(),
+    ]);
+
+    const [redisResult, databaseResult] = results;
+
+    if (redisResult.status === "fulfilled") {
+      logger.info("Redis disconnected successfully");
+    } else {
+      logger.error(
+        { err: redisResult.reason },
+        "Redis disconnect failed",
+      );
+      process.exitCode = 1;
+    }
+
+    if (databaseResult.status === "fulfilled") {
+      logger.info("Database disconnected successfully");
+    } else {
+      logger.error(
+        { err: databaseResult.reason },
+        "Database disconnect failed",
+      );
+      process.exitCode = 1;
+    }
+
+    logger.info("Graceful shutdown completed");
+  })();
+
+  return cleanupPromise;
+};
+
+const startServer = async (): Promise<void> => {
   try {
     await prisma.$connect();
     logger.info("Database Connected Successfully");
 
+    try {
+      await connectRedis();
+      logger.info("Redis Connected Successfully");
+    } catch (error) {
+      logger.warn(
+        { err: error },
+        "Redis unavailable. Continuing without cache.",
+      );
+    }
+
+    if (shuttingDown) {
+      await cleanupDependencies();
+      return;
+    }
+
     server = app.listen(env.PORT, () => {
       logger.info(
-        {
-          port: env.PORT,
-        },
+        { port: env.PORT },
         "Payflow Server Started",
       );
     });
@@ -25,58 +78,48 @@ const startServer = async () => {
     server.on("error", (error) => {
       logger.fatal({ err: error }, "HTTP Server Error");
       process.exitCode = 1;
-      shutdown("SERVER_ERROR");
+      void shutdown("SERVER_ERROR");
     });
   } catch (error) {
     logger.fatal({ err: error }, "Server Startup Failed");
-
-    try {
-      await prisma.$disconnect();
-    } catch (disconnectError) {
-      logger.error(
-        { err: disconnectError },
-        "Database cleanup after startup failure failed",
-      );
-    }
-
     process.exitCode = 1;
+    await cleanupDependencies();
   }
 };
 
-const shutdown = (signal: string) => {
-  if (shuttingDown) return;
-  shuttingDown = true;
-
-  logger.info({ signal }, "Graceful shutdown started");
-
-  if (!server) {
-    void prisma.$disconnect().catch((error) => {
-      logger.error({ err: error }, "Database disconnect failed");
-      process.exitCode = 1;
-    });
-    return;
+const shutdown = (signal: string): Promise<void> => {
+  if (shuttingDown) {
+    return cleanupDependencies();
   }
 
-  server.close((error) => {
-    if (error) {
-      logger.error({ err: error }, "HTTP server close failed");
-      process.exitCode = 1;
-    }
+  shuttingDown = true;
+  logger.info({ signal }, "Graceful shutdown started");
 
-    void prisma
-      .$disconnect()
-      .then(() => {
-        logger.info("Database disconnected successfully");
-        logger.info("Graceful shutdown completed");
-      })
-      .catch((disconnectError) => {
-        logger.error({ err: disconnectError }, "Database disconnect failed");
+  if (!server?.listening) {
+    return cleanupDependencies();
+  }
+
+  return new Promise<void>((resolve) => {
+    server!.close((error) => {
+      if (error) {
+        logger.error(
+          { err: error },
+          "HTTP server close failed",
+        );
         process.exitCode = 1;
-      });
+      }
+
+      void cleanupDependencies().finally(resolve);
+    });
   });
 };
 
-process.on("SIGTERM", () => shutdown("SIGTERM"));
-process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
 
-startServer();
+process.on("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+
+void startServer();
